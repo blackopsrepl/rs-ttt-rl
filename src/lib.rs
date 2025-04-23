@@ -26,7 +26,9 @@ impl CRand {
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards");
         CRand {
-            state: since_epoch.as_secs() as u32,
+            /* This uses bitwise XOR to combine seconds and nanoseconds for a higher precision seeds.
+            This ensures unique seeds - even for multiple calls within one second, which would else get identical seeds */
+            state: since_epoch.as_secs() as u32 ^ (since_epoch.subsec_nanos() as u32),
         }
     }
 
@@ -53,12 +55,14 @@ mod tests {
 
     #[test]
     fn test_random_weight() {
-        let mut rng = CRand::new();
-        let weight = rng.rand_float() - 0.5;
-        assert!(
-            weight >= -0.5 && weight < 0.5,
-            "Weight should be in [-0.5, 0.5)"
-        );
-        print!("{}\n", weight)
+        for _ in 0..20 {
+            let mut rng = CRand::new();
+            let weight = rng.rand_float() - 0.5;
+            assert!(
+                weight >= -0.5 && weight < 0.5,
+                "Weight should be in [-0.5, 0.5)"
+            );
+            print!("{}\n", weight)
+        }
     }
 }
