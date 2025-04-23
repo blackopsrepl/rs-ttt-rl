@@ -54,6 +54,12 @@ macro_rules! random_weight {
     }};
 }
 
+impl Default for NeuralNetwork {
+    fn default() -> Self {
+        NeuralNetwork::new()
+    }
+}
+
 impl NeuralNetwork {
     fn new() -> Self {
         let mut weights_ih = vec![0.0; NN_INPUT_SIZE * NN_HIDDEN_SIZE];

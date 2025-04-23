@@ -2,8 +2,8 @@
 Simple pseudo-random generator, aims to be similar to the standard C rand() function
 
 The `rand()` method implements a linbear congruential generator (LCG) calculation and aims to be compatible
-with the standard C `rand()` function, using a linear congruential generator (LCG) calculation. 
-It updates the state by multiplying it with a constant multiplier, adding an increment 
+with the standard C `rand()` function, using a linear congruential generator (LCG) calculation.
+It updates the state by multiplying it with a constant multiplier, adding an increment
 and discarding the lower 16 bits to produce a random number between 0 and 32767.
 
 The `rand_float()` method returns a float between 0 and 1 by dividing the result of `rand()` by 32767.
@@ -12,6 +12,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct CRand {
     state: u32,
+}
+impl Default for CRand {
+    fn default() -> Self {
+        CRand::new()
+    }
 }
 
 impl CRand {
@@ -28,7 +33,7 @@ impl CRand {
         CRand {
             /* This uses bitwise XOR to combine seconds and nanoseconds for a higher precision seeds.
             This ensures unique seeds - even for multiple calls within one second, which would else get identical seeds */
-            state: since_epoch.as_secs() as u32 ^ (since_epoch.subsec_nanos() as u32),
+            state: since_epoch.as_secs() as u32 ^ (since_epoch.subsec_nanos()),
         }
     }
 
@@ -59,10 +64,10 @@ mod tests {
             let mut rng = CRand::new();
             let weight = rng.rand_float() - 0.5;
             assert!(
-                weight >= -0.5 && weight < 0.5,
+                (-0.5..0.5).contains(&weight),
                 "Weight should be in [-0.5, 0.5)"
             );
-            print!("{}\n", weight)
+            print!("{}", weight)
         }
     }
 }
