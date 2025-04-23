@@ -1,10 +1,10 @@
-/* 
+/*
 rs-ttt-rl
 Rewrite in Rust of ttt-rl, originally written by antirez - https://github.com/antirez/ttt-rl
 */
 
-use std::f32;
 use rs_ttt_rl::CRand;
+use std::f32;
 
 // Neural network parameters
 const NN_INPUT_SIZE: usize = 18;
@@ -14,8 +14,8 @@ const LEARNING_RATE: f32 = 0.1;
 
 // Game board representation
 struct GameState {
-    board: [char; 9],        // Can be '.' (empty) or 'X', 'O'
-    current_player: usize,   // 0 for player (X), 1 for computer (O)
+    board: [char; 9],      // Can be '.' (empty) or 'X', 'O'
+    current_player: usize, // 0 for player (X), 1 for computer (O)
 }
 
 struct NeuralNetwork {
@@ -28,24 +28,28 @@ struct NeuralNetwork {
     // Activations are part of the structure for simplicity
     inputs: Vec<f32>,
     hidden: Vec<f32>,
-    raw_logits: Vec<f32>,    // Outputs before softmax()
-    outputs: Vec<f32>,       // Outputs after softmax()
+    raw_logits: Vec<f32>, // Outputs before softmax()
+    outputs: Vec<f32>,    // Outputs after softmax()
 }
 
 // ReLU activation function
 fn relu(x: f32) -> f32 {
-    return x.max(0.0);
+    x.max(0.0)
 }
 
 // Derivative of ReLU acctivation function
 fn relu_derivative(x: f32) -> f32 {
-    return if x > 0.0 { 1.0 } else { 0.0 };
+    if x > 0.0 {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /* Initialize a neural network with random weights.
 Since we are committing to using the standard libary only,
 we will implement CRand as a simple linear congruential generator
-compatible with standard C rnd(), from a new random_weight!() macro. See lib.rs. */
+compatible with standard C rnd(), from a new random_weight!() macro. */
 #[macro_export]
 macro_rules! random_weight {
     () => {{
@@ -67,25 +71,20 @@ impl NeuralNetwork {
         let mut biases_h = vec![0.0; NN_HIDDEN_SIZE];
         let mut biases_o = vec![0.0; NN_OUTPUT_SIZE];
 
-        // Initialize weights with random values between -0.5 and 0.5
-        for i in 0..NN_INPUT_SIZE * NN_HIDDEN_SIZE {
-            weights_ih[i] = random_weight!();
-        }
-        for i in 0..NN_HIDDEN_SIZE * NN_OUTPUT_SIZE {
-            weights_ho[i] = random_weight!();
-        }
-        for i in 0..NN_HIDDEN_SIZE {
-            biases_h[i] = random_weight!();
-        }
-        for i in 0..NN_OUTPUT_SIZE {
-            biases_o[i] = random_weight!();
-        }
+        /* Initialize weights with random values between -0.5 and 0.5
+        Since random_weight!() uses the current timestamp as a seed for 
+        CRand.rand_float(), we need to use iterators to avoid initializing
+        duplicate values */
+        weights_ih.iter_mut().for_each(|w| *w = random_weight!());
+        weights_ho.iter_mut().for_each(|w| *w = random_weight!());
+        biases_h.iter_mut().for_each(|b| *b = random_weight!());
+        biases_o.iter_mut().for_each(|b| *b = random_weight!());
 
-        NeuralNetwork { 
-            weights_ih, 
-            weights_ho, 
-            biases_h, 
-            biases_o, 
+        NeuralNetwork {
+            weights_ih,
+            weights_ho,
+            biases_h,
+            biases_o,
             inputs: vec![0.0; NN_INPUT_SIZE],
             hidden: vec![0.0; NN_HIDDEN_SIZE],
             raw_logits: vec![0.0; NN_OUTPUT_SIZE],
@@ -122,7 +121,10 @@ mod tests {
             current_player: 0,
         };
 
-        assert_eq!(game_state.board, ['.', '.', '.', '.', '.', '.', '.', '.', '.']);
+        assert_eq!(
+            game_state.board,
+            ['.', '.', '.', '.', '.', '.', '.', '.', '.']
+        );
         assert_eq!(game_state.current_player, 0);
     }
 
