@@ -121,6 +121,33 @@ impl NeuralNetwork {
             }
         }
     }
+
+    /* Neural network foward pass (inference). We store the activations
+    so we can also do backpropagation later. */
+    fn forward_pass(&mut self, inputs: &[f32]) {
+        // Copy inputs
+        self.inputs.copy_from_slice(&inputs[0..NN_INPUT_SIZE]);
+
+        // Input to hidden layer
+        for i in 0..NN_HIDDEN_SIZE {
+            let mut sum = self.biases_h[i];
+            for j in 0..NN_INPUT_SIZE {
+                sum += self.inputs[j] * self.weights_ih[i * NN_INPUT_SIZE + j];
+            }
+            self.hidden[i] = relu(sum);
+        }
+
+        // Hidden to output (raw logits)
+        for i in 0..NN_OUTPUT_SIZE {
+            self.raw_logits[i] = self.biases_o[i];
+            for j in 0..NN_HIDDEN_SIZE {
+                self.raw_logits[i] += self.hidden[j] * self.weights_ho[j * NN_OUTPUT_SIZE + i]
+            }
+        }
+
+        // Apply softmax to get the final probabilities
+        self.softmax();
+    }
 }
 
 fn main() {}
@@ -247,5 +274,61 @@ mod tests {
                 uniform_prob
             );
         });
+    }
+
+    #[test]
+    fn test_forward_pass() {
+        // Create a minimal test network with predetermined weights and biases
+        let mut nn = NeuralNetwork::new();
+        
+        // Set weights and biases to simple values for easy manual verification
+        // For example, set weights_ih to 0.1, weights_ho to 0.2, biases_h to 0.01, biases_o to 0.02
+        for i in 0..NN_HIDDEN_SIZE {
+            nn.biases_h[i] = 0.01;
+            for j in 0..NN_INPUT_SIZE {
+                nn.weights_ih[i * NN_INPUT_SIZE + j] = 0.1;
+            }
+        }
+        
+        for i in 0..NN_OUTPUT_SIZE {
+            nn.biases_o[i] = 0.02;
+            for j in 0..NN_HIDDEN_SIZE {
+                nn.weights_ho[j * NN_OUTPUT_SIZE + i] = 0.2;
+            }
+        }
+        
+        // Prepare simple input data (e.g., all 1.0)
+        let inputs = vec![1.0; NN_INPUT_SIZE];
+        
+        // Run forward pass
+        nn.forward_pass(&inputs);
+        
+        // Calculate expected outputs manually
+        // For hidden layer: bias + sum(input * weight) = 0.01 + (1.0 * 0.1 * NN_INPUT_SIZE) = 0.01 + 0.1*N
+        let expected_hidden = relu(0.01 + 0.1 * NN_INPUT_SIZE as f32);
+        
+        // For output layer (before softmax): bias + sum(hidden * weight) = 0.02 + (expected_hidden * 0.2 * NN_HIDDEN_SIZE)
+        let expected_raw_logit = 0.02 + expected_hidden * 0.2 * NN_HIDDEN_SIZE as f32;
+        
+        // Check hidden layer values
+        for h in nn.hidden.iter() {
+            assert!((h - expected_hidden).abs() < 1e-5);
+        }
+        
+        // Manually calculate softmax output
+        let mut expected_output = vec![0.0; NN_OUTPUT_SIZE];
+        let mut sum_exp = 0.0;
+        for i in 0..NN_OUTPUT_SIZE {
+            expected_output[i] = expected_raw_logit.exp();
+            sum_exp += expected_output[i];
+        }
+        for i in 0..NN_OUTPUT_SIZE {
+            expected_output[i] /= sum_exp;
+        }
+        
+        // Check output values
+        for i in 0..NN_OUTPUT_SIZE {
+            assert!((nn.outputs[i] - expected_output[i]).abs() < 1e-5);
+        }
     }
 }
