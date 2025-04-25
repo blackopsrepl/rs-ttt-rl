@@ -12,11 +12,11 @@ This is a work-in-progress port. The following components have been implemented:
 - Forward pass with ReLU activation for hidden layers and softmax for output
 - Weight and bias initialization using a custom pseudo-random number generator (`CRand`)
 - Basic game state representation
-- Unit tests for ReLU, softmax, forward pass, and random weight generation
+- Back propagation
 
 ### Missing Features (To Be Implemented)
 
-- Backpropagation and training logic
+- Training logic
 - Game logic (move validation, win/draw conditions, etc.)
 - Reinforcement learning integration
 - Main game loop and interaction with the neural network
