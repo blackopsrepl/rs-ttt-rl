@@ -217,7 +217,182 @@ impl NeuralNetwork {
     }
 }
 
+impl GameState {
+    // Initialize game state with an empty board
+    fn new() -> Self {
+        GameState {
+            board: ['.'; 9],
+            current_player: 0,
+        }
+    }
+
+    // Show board on screen in ASCII "art"
+    fn display_board(&self) {
+        for row in 0..3 {
+            //Display the board symbols
+            print!(
+                "{} {} {}\n",
+                self.board[row * 3],
+                self.board[row * 3 + 1],
+                self.board[row * 3 + 2]
+            )
+        }
+        println!();
+    }
+
+    /* Convert board state to neural network inputs. Note that we use
+     a peculiar encoding I descrived here:
+     https://www.youtube.com/watch?v=EXbgUXt8fFU
+
+     Instead of one-hot encoding, we can represent N different categories
+     as different bit patterns. In this specific case it's trivial:
+
+     00 = empty
+     10 = X
+     01 = O
+
+    Two inputs per symbol instead of 3 in this case, but in the general case
+    this reduces the input dimensionality A LOT.
+
+    LEARNING OPPORTUNITY: You may want to learn (if not already aware) of
+    different ways to represent non scalar inputs in neural networks:
+    One hot encoding, learned embeddings, and even if it's just my random
+    exeriment this "permutation coding" that I'm using here. */
+    fn board_to_inputs(&self, inputs: &mut [f32]) {
+        for i in 0..9 {
+            if self.board[i] == '.' {
+                inputs[i * 2] = 0.0;
+                inputs[i * 2 + 1] = 0.0;
+            } else if self.board[i] == 'X' {
+                inputs[i * 2] = 1.0;
+                inputs[i * 2 + 1] = 0.0;
+            } else {
+                // '0'
+                inputs[i * 2] = 0.0;
+                inputs[i * 2 + 1] = 1.0;
+            }
+        }
+    }
+
+    /* Check if the game is over (win or tie).
+    Very brutal but fast enough. */
+    fn check_game_over(&self, winner: &mut char) -> bool {
+        // Check rows
+        for i in 0..3 {
+            if self.board[i * 3] != '.'
+                && self.board[i * 3] == self.board[i * 3 + 1]
+                && self.board[i * 3 + 1] == self.board[i * 3 + 2]
+            {
+                *winner = self.board[i * 3];
+                return true;
+            }
+        }
+
+        // Check columns
+        for i in 0..3 {
+            if self.board[i] != '.'
+                && self.board[i] == self.board[i + 3]
+                && self.board[i + 3] == self.board[i + 6]
+            {
+                *winner = self.board[i];
+                return true;
+            }
+        }
+
+        // Check diagonals
+        if self.board[0] != '.' && self.board[0] == self.board[4] && self.board[4] == self.board[8]
+        {
+            *winner = self.board[0];
+            return true;
+        }
+
+        if self.board[2] != '.' && self.board[2] == self.board[4] && self.board[4] == self.board[6]
+        {
+            *winner = self.board[2];
+            return true;
+        }
+
+        // Check for tie (no free tiles left)
+        let mut empty_tiles: usize = 0;
+        for i in 0..9 {
+            if self.board[i] == '.' {
+                empty_tiles += 1;
+            }
+            if (empty_tiles == 0) {
+                *winner = 'T'; // tie
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /* Get the best move for the computer using the neural network.
+    Note that there is no complex sampling at all, we just get
+    the output with the highest value THAT has an empty tile. */
+    fn get_computer_move(&self, nn: &mut NeuralNetwork, display_probs: bool) -> i32 {
+        let mut inputs = vec![0.0; NN_INPUT_SIZE];
+
+        self.board_to_inputs(&mut inputs);
+        nn.forward_pass(&inputs);
+
+        // Find the highest probability valie and best legal move
+        let mut highest_prob: f32 = -1.0;
+        let mut highest_prob_idx: usize = 0;
+        let mut best_move: i32 = -1;
+        let mut best_legal_prob: f32 = -1.0;
+
+        for i in 0..9 {
+            // Track highest probability overall
+            if nn.outputs[i] > highest_prob {
+                highest_prob = nn.outputs[i];
+                highest_prob_idx = i
+            }
+
+            // Track best legal move
+            if self.board[i] == '.' && best_move == -1 || nn.outputs[i] > best_legal_prob {
+                best_move = i as i32;
+                best_legal_prob = nn.outputs[i];
+            }
+        }
+
+        /* That's just for debugging. It's interesting to show to user
+        in the first iterations of the game, since you can see how initially
+        the net picks illegal moves as best, and so forth. */
+        if display_probs {
+            println!("Neural Network move probabilities");
+            for row in 0..3 {
+                for col in 0..3 {
+                    let pos: usize = row * 3 + col;
+
+                    // Print probability as percentage
+                    print!("{:5.1}%", nn.outputs[pos] * 100.0);
+
+                    // Add markers
+                    if pos == highest_prob_idx {
+                        print!("*"); // Highest probability overall
+                    }
+
+                    if pos as i32 == best_move {
+                        print!("#") // Selected move (highest valid probability)
+                    }
+                    println!();
+                }
+
+                // Sum of probabilities should be 1.0
+                let mut total_prob = 0.0;
+                for i in 0..9 {
+                    total_prob += nn.outputs[i];
+                }
+                println!("Sum of probabilities: {:.2}", total_prob);
+            }
+        }
+        return best_move;
+    }
+}
+
 fn main() {}
+
+/* === TESTS === */
 
 /* These tests are not very meaningful by themselves, but since we are porting from C to Rust on the fly,
 it's handy to be able to test if each function works as intended. */
@@ -238,18 +413,17 @@ mod tests {
 
     #[test]
     fn test_game_state() {
-        // TODO: simulate game state change
+        // Initialize new game state
+        let mut game_state = GameState::new();
 
-        let game_state = GameState {
-            board: ['.', '.', '.', '.', '.', '.', '.', '.', '.'],
-            current_player: 0,
-        };
+        assert_eq!(game_state.current_player, 0);
+
+        game_state.display_board();
 
         assert_eq!(
             game_state.board,
             ['.', '.', '.', '.', '.', '.', '.', '.', '.']
         );
-        assert_eq!(game_state.current_player, 0);
     }
 
     #[test]
@@ -265,6 +439,42 @@ mod tests {
         println!("hidden: {:?}", nn.hidden);
         println!("raw_logits: {:?}", nn.raw_logits);
         println!("outputs: {:?}", nn.outputs);
+    }
+
+    // test board_to_inputs
+    #[test]
+    fn test_board_to_inputs() {
+        let mut nn = NeuralNetwork::new();
+        let mut inputs = vec![0.0; NN_INPUT_SIZE];
+
+        // crete game state
+        let mut game_state = GameState::new();
+
+        // Test case 1: Empty board
+        game_state.board_to_inputs(&mut inputs);
+        nn.inputs = inputs.clone();
+
+        assert!(
+            nn.inputs.iter().all(|&x| x == 0.0),
+            "All inputs should be 0.0, got {:?}",
+            nn.inputs
+        );
+
+        // Test case 2: non-empty board
+        game_state.board[0] = 'X';
+        game_state.board[1] = 'O';
+        game_state.board_to_inputs(&mut inputs);
+        nn.inputs = inputs.clone();
+        assert_eq!(nn.inputs[0], 1.0);
+        assert_eq!(nn.inputs[1], 0.0);
+        assert_eq!(nn.inputs[2], 0.0);
+        assert_eq!(nn.inputs[3], 1.0);
+        assert_eq!(nn.inputs[4], 0.0);
+        assert_eq!(nn.inputs[5], 0.0);
+        assert_eq!(nn.inputs[6], 0.0);
+        assert_eq!(nn.inputs[7], 0.0);
+        assert_eq!(nn.inputs[8], 0.0);
+        // TODO: study results
     }
 
     // test softmax
@@ -425,7 +635,7 @@ mod tests {
         for i in 0..NN_INPUT_SIZE * NN_HIDDEN_SIZE {
             nn.weights_ih[i] = random_weight!();
         }
-    
+
         /* Set weights_ho to deterministic values (0.2 + i * 0.001) for reproducibility.
         weights_ho connects NN_HIDDEN_SIZE (100) hidden nodes to NN_OUTPUT_SIZE (9) outputs.
         Variations (0.2, 0.201, ...) ensure non-zero hidden_deltas. This avoids situations
@@ -433,39 +643,39 @@ mod tests {
         for i in 0..NN_HIDDEN_SIZE * NN_OUTPUT_SIZE {
             nn.weights_ho[i] = 0.2 + (i as f32 * 0.001);
         }
-    
+
         /* Set hidden layer biases to a fixed value (0.01) for consistency.
         biases_h (size NN_HIDDEN_SIZE) adds a constant to each hidden node’s sum
         before ReLU activation in forward_pass. */
         for i in 0..NN_HIDDEN_SIZE {
             nn.biases_h[i] = 0.01;
         }
-    
+
         /* Set output layer biases to a fixed value (0.02) for consistency.
         biases_o (size NN_OUTPUT_SIZE) adds a constant to each output node’s raw logits
         before softmax in forward_pass. */
         for i in 0..NN_OUTPUT_SIZE {
             nn.biases_o[i] = 0.02;
         }
-    
+
         /* Store the initial weights_ih to compare with updated weights after backprop.
         This allows us to check if backprop modifies weights_ih as expected. */
         let orig_weights_ih = nn.weights_ih.clone();
-    
+
         /* Create an input vector of size NN_INPUT_SIZE (18) initialized to zeros.
         This represents a tic-tac-toe board state for the network to process. */
         let mut inputs = vec![0.0; NN_INPUT_SIZE];
-    
+
         /* Set the first five inputs to non-zero values (0.5, 0.3, 0.7, 0.2, 0.4).
         This ensures the first five weights_ih updates are non-zero, as the gradient
         is hidden_deltas[j] * inputs[i]. Zero inputs produce zero updates. */
         for i in 0..inputs.len().min(5) {
             inputs[i] = [0.5, 0.3, 0.7, 0.2, 0.4][i];
         }
-    
+
         // Print inputs for debugging, showing the board state being tested.
         println!("Input values: {:?}", inputs);
-    
+
         /* Run the forward pass to compute hidden and output values.
         forward_pass:
         1. Copies inputs to nn.inputs.
@@ -473,47 +683,47 @@ mod tests {
         3. Computes raw_logits: biases_o[i] + sum(hidden[j] * weights_ho[j * NN_OUTPUT_SIZE + i]).
         4. Applies softmax to get output probabilities. */
         nn.forward_pass(&inputs);
-    
+
         /* Print hidden values to verify they vary due to random weights_ih.
         These are the ReLU-activated sums for each of the 100 hidden nodes. */
         println!("Hidden values after forward pass: {:?}", nn.hidden);
-    
+
         /* Print output values to verify they vary due to weights_ho variations.
         These are the softmax probabilities for each of the 9 output nodes. */
         println!("Output values after forward pass: {:?}", nn.outputs);
-    
+
         /* Create a target probability vector of size NN_OUTPUT_SIZE (9), all zeros.
         This represents the desired output (e.g., the correct move). */
         let mut target_probs = vec![0.0; NN_OUTPUT_SIZE];
-    
+
         /* Set the first output to 1.0, simulating a target where the first move is correct.
         This creates a clear error for backprop to learn from. */
         target_probs[0] = 1.0;
-    
+
         // Print target probabilities for debugging, showing the expected output.
         println!("Target probabilities: {:?}", target_probs);
-    
+
         /* Define the learning rate (0.1) for weight updates in backprop.
         This scales the gradient: weight -= learning_rate * hidden_deltas[j] * inputs[i]. */
         let learning_rate = 0.1;
-    
+
         /* Define reward scaling (1.0) for backprop.
         This scales the output error: output_deltas[i] = (outputs[i] - target_probs[i]) * reward_scaling.abs(). */
         let reward_scaling = 1.0;
-    
+
         // Print learning rate and reward scaling for debugging.
         println!(
             "Running backprop with learning_rate={}, reward_scaling={}",
             learning_rate, reward_scaling
         );
-    
+
         /* Run backpropagation to update weights and biases based on the error.
         backprop:
         1. Computes output_deltas: (outputs[i] - target_probs[i]) * reward_scaling.abs().
         2. Computes hidden_deltas: error = sum(output_deltas[j] * weights_ho[i * NN_OUTPUT_SIZE + j]), then hidden_deltas[i] = error * relu_derivative(hidden[i]).
         3. Updates weights_ho, biases_o, weights_ih, and biases_h using gradients. */
         nn.backprop(&target_probs, learning_rate, reward_scaling);
-    
+
         /* Print the first five weight changes to verify backprop updates weights_ih.
         Changes should be non-zero and proportional to inputs[i] (0.5, 0.3, 0.7, 0.2, 0.4). */
         println!("Weight changes (first 5 input-hidden weights):");
@@ -524,7 +734,7 @@ mod tests {
                 i, orig_weights_ih[i], nn.weights_ih[i], change
             );
         }
-    
+
         /* Check if any weights_ih were updated significantly (> 1e-10).
         This ensures backprop works, as non-zero inputs and weights_ho variations
         produce detectable changes. */
@@ -535,7 +745,7 @@ mod tests {
                 break;
             }
         }
-    
+
         // Assert that at least one weight was updated, failing if backprop didn’t work.
         assert!(any_weight_updated, "Input-hidden weights should be updated");
     }
