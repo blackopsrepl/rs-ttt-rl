@@ -181,39 +181,79 @@ impl NeuralNetwork {
         }
 
         // Backpropagate error to hidden layer
-        for i in 0..NN_HIDDEN_SIZE {
-            let mut error: f32 = 0.0;
-            for j in 0..NN_OUTPUT_SIZE {
-                error += output_deltas[j] * self.weights_ho[i * NN_OUTPUT_SIZE + j];
-            }
-            hidden_deltas[i] = error * relu_derivative(self.hidden[i]);
-        }
+        hidden_deltas
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, hidden_delta)| {
+                let error: f32 = output_deltas
+                    .iter()
+                    .enumerate()
+                    .map(|(j, delta)| delta * self.weights_ho[i * NN_OUTPUT_SIZE + j])
+                    .sum::<f32>();
+
+                *hidden_delta = error * relu_derivative(self.hidden[i]);
+            });
 
         /* === STEP 2: Weights updating === */
 
+        // *** Original porting ***
+        //
         // Output layer weights and biases
-        for i in 0..NN_HIDDEN_SIZE {
-            for j in 0..NN_OUTPUT_SIZE {
+        // for i in 0..NN_HIDDEN_SIZE {
+        //     for j in 0..NN_OUTPUT_SIZE {
+        //         self.weights_ho[i * NN_OUTPUT_SIZE + j] -=
+        //             learning_rate * output_deltas[j] * self.hidden[i];
+        //     }
+        // }
+
+        // for j in 0..NN_OUTPUT_SIZE {
+        //     self.biases_o[j] -= learning_rate * output_deltas[j];
+        // }
+
+        // // Hidden layer weights and biases
+        // for j in 0..NN_HIDDEN_SIZE {
+        //     for i in 0..NN_INPUT_SIZE {
+        //         self.weights_ih[j * NN_INPUT_SIZE + i] -=
+        //             learning_rate * hidden_deltas[j] * self.inputs[i];
+        //     }
+        // }
+
+        // for j in 0..NN_HIDDEN_SIZE {
+        //     self.biases_h[j] -= learning_rate * hidden_deltas[j];
+        // }
+
+        // Instead of C-style nested loops, we create a cartesian product of coordinates using flat_map
+        (0..NN_HIDDEN_SIZE)
+            .flat_map(|i| {
+                // For each hidden neuron i, process all outputs j
+                (0..NN_OUTPUT_SIZE).map(move |j| (i, j))
+            })
+            .for_each(|(i, j)| {
+                // Update each weight using the same formula as before
                 self.weights_ho[i * NN_OUTPUT_SIZE + j] -=
                     learning_rate * output_deltas[j] * self.hidden[i];
-            }
-        }
+            });
 
-        for j in 0..NN_OUTPUT_SIZE {
-            self.biases_o[j] -= learning_rate * output_deltas[j];
-        }
+        // Update output biases using iterator
+        self.biases_o.iter_mut().enumerate().for_each(|(j, bias)| {
+            *bias -= learning_rate * output_deltas[j];
+        });
 
-        // Hidden layer weights and biases
-        for j in 0..NN_HIDDEN_SIZE {
-            for i in 0..NN_INPUT_SIZE {
+        // Hidden layer weights and biases - similar pattern
+        (0..NN_HIDDEN_SIZE)
+            .flat_map(|j| {
+                // For each hidden neuron j, process all inputs i
+                (0..NN_INPUT_SIZE).map(move |i| (j, i))
+            })
+            .for_each(|(j, i)| {
                 self.weights_ih[j * NN_INPUT_SIZE + i] -=
                     learning_rate * hidden_deltas[j] * self.inputs[i];
-            }
-        }
+            });
 
-        for j in 0..NN_HIDDEN_SIZE {
-            self.biases_h[j] -= learning_rate * hidden_deltas[j];
-        }
+        // Update hidden biases using iterator
+        self.biases_h.iter_mut().enumerate().for_each(|(j, bias)| {
+            *bias -= learning_rate * hidden_deltas[j];
+        });
     }
 }
 
@@ -230,7 +270,7 @@ impl GameState {
     fn display_board(&self) {
         for row in 0..3 {
             //Display the board symbols
-            print!(
+            println!(
                 "{} {} {}\n",
                 self.board[row * 3],
                 self.board[row * 3 + 1],
@@ -318,12 +358,12 @@ impl GameState {
             if self.board[i] == '.' {
                 empty_tiles += 1;
             }
-            if (empty_tiles == 0) {
+            if empty_tiles == 0 {
                 *winner = 'T'; // tie
                 return true;
             }
         }
-        return false;
+        false
     }
 
     /* Get the best move for the computer using the neural network.
@@ -386,7 +426,7 @@ impl GameState {
                 println!("Sum of probabilities: {:.2}", total_prob);
             }
         }
-        return best_move;
+        best_move
     }
 }
 
@@ -414,7 +454,7 @@ mod tests {
     #[test]
     fn test_game_state() {
         // Initialize new game state
-        let mut game_state = GameState::new();
+        let game_state = GameState::new();
 
         assert_eq!(game_state.current_player, 0);
 
@@ -567,6 +607,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_forward_pass() {
         // Create a minimal test network with predetermined weights and biases
         let mut nn = NeuralNetwork::new();
@@ -606,7 +647,7 @@ mod tests {
         }
 
         // Manually calculate softmax output
-        let mut expected_output = vec![0.0; NN_OUTPUT_SIZE];
+        let mut expected_output = [0.0; NN_OUTPUT_SIZE];
         let mut sum_exp = 0.0;
         for i in 0..NN_OUTPUT_SIZE {
             expected_output[i] = expected_raw_logit.exp();
@@ -623,6 +664,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn test_backprop_deterministic() {
         /* Create a new neural network instance with random initial weights and biases.
         NeuralNetwork::new initializes weights_ih, weights_ho, biases_h, and biases_o
@@ -669,9 +711,8 @@ mod tests {
         /* Set the first five inputs to non-zero values (0.5, 0.3, 0.7, 0.2, 0.4).
         This ensures the first five weights_ih updates are non-zero, as the gradient
         is hidden_deltas[j] * inputs[i]. Zero inputs produce zero updates. */
-        for i in 0..inputs.len().min(5) {
-            inputs[i] = [0.5, 0.3, 0.7, 0.2, 0.4][i];
-        }
+        let len = inputs.len().min(5);
+        inputs[..len].copy_from_slice(&[0.5, 0.3, 0.7, 0.2, 0.4][..len]);
 
         // Print inputs for debugging, showing the board state being tested.
         println!("Input values: {:?}", inputs);
