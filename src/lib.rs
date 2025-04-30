@@ -52,6 +52,11 @@ impl CRand {
     pub fn rand_float(&mut self) -> f32 {
         self.rand() as f32 / Self::RAND_MAX as f32
     }
+
+    // Returns an integer between 0 and n-1
+    pub fn rand_int(&mut self, n: u32) -> u32 {
+        self.rand() % n
+    }
 }
 
 #[cfg(test)]
