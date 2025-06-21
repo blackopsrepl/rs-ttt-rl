@@ -4,7 +4,10 @@ Rewrite in Rust of ttt-rl, originally written by antirez - https://github.com/an
 */
 
 use rs_ttt_rl::CRand;
+use std::env;
 use std::f32;
+use std::io;
+use std::io::Write;
 
 // Neural network parameters
 const NN_INPUT_SIZE: usize = 18;
@@ -30,14 +33,23 @@ struct NeuralNetwork {
     hidden: Vec<f32>,
     raw_logits: Vec<f32>, // Outputs before softmax()
     outputs: Vec<f32>,    // Outputs after softmax()
+
+    // Pre-allocated vectors for backprop to avoid allocations
+    output_deltas: Vec<f32>,
+    hidden_deltas: Vec<f32>,
+
+    // Single RNG instance to avoid expensive SystemTime calls
+    rng: CRand,
 }
 
 // ReLU activation function
+#[inline]
 fn relu(x: f32) -> f32 {
     x.max(0.0)
 }
 
-// Derivative of ReLU acctivation function
+// Derivative of ReLU activation function
+#[inline]
 fn relu_derivative(x: f32) -> f32 {
     if x > 0.0 {
         1.0
@@ -46,17 +58,7 @@ fn relu_derivative(x: f32) -> f32 {
     }
 }
 
-/* Initialize a neural network with random weights.
-Since we are committing to using the standard libary only,
-we will implement CRand as a simple linear congruential generator
-compatible with standard C rnd(), from a new random_weight!() macro. */
-#[macro_export]
-macro_rules! random_weight {
-    () => {{
-        let mut rng: CRand = CRand::new();
-        rng.rand_float() - 0.5
-    }};
-}
+/* Neural network with optimized performance */
 
 impl Default for NeuralNetwork {
     fn default() -> Self {
@@ -66,19 +68,26 @@ impl Default for NeuralNetwork {
 
 impl NeuralNetwork {
     fn new() -> Self {
+        let mut rng = CRand::new();
+
         let mut weights_ih: Vec<f32> = vec![0.0; NN_INPUT_SIZE * NN_HIDDEN_SIZE];
         let mut weights_ho: Vec<f32> = vec![0.0; NN_HIDDEN_SIZE * NN_OUTPUT_SIZE];
         let mut biases_h: Vec<f32> = vec![0.0; NN_HIDDEN_SIZE];
         let mut biases_o: Vec<f32> = vec![0.0; NN_OUTPUT_SIZE];
 
-        /* Initialize weights with random values between -0.5 and 0.5
-        Since random_weight!() uses the current timestamp as a seed for
-        CRand.rand_float(), we need to use iterators to avoid initializing
-        duplicate values */
-        weights_ih.iter_mut().for_each(|w| *w = random_weight!());
-        weights_ho.iter_mut().for_each(|w| *w = random_weight!());
-        biases_h.iter_mut().for_each(|b| *b = random_weight!());
-        biases_o.iter_mut().for_each(|b| *b = random_weight!());
+        // Initialize weights with random values between -0.5 and 0.5 using single RNG
+        for w in weights_ih.iter_mut() {
+            *w = rng.rand_float() - 0.5;
+        }
+        for w in weights_ho.iter_mut() {
+            *w = rng.rand_float() - 0.5;
+        }
+        for b in biases_h.iter_mut() {
+            *b = rng.rand_float() - 0.5;
+        }
+        for b in biases_o.iter_mut() {
+            *b = rng.rand_float() - 0.5;
+        }
 
         NeuralNetwork {
             weights_ih,
@@ -89,6 +98,9 @@ impl NeuralNetwork {
             hidden: vec![0.0; NN_HIDDEN_SIZE],
             raw_logits: vec![0.0; NN_OUTPUT_SIZE],
             outputs: vec![0.0; NN_OUTPUT_SIZE],
+            output_deltas: vec![0.0; NN_OUTPUT_SIZE],
+            hidden_deltas: vec![0.0; NN_HIDDEN_SIZE],
+            rng,
         }
     }
 
@@ -153,107 +165,403 @@ impl NeuralNetwork {
     dramatic, so that we can adjust the weights proportionally to the
     reward we want to provide. */
     fn backprop(&mut self, target_probs: &[f32], learning_rate: f32, reward_scaling: f32) {
-        let mut output_deltas: Vec<f32> = vec![0.0; NN_OUTPUT_SIZE];
-        let mut hidden_deltas: Vec<f32> = vec![0.0; NN_HIDDEN_SIZE];
-
         /* === STEP 1: Compute deltas === */
 
-        /* Calculate output layer deltas:
-        Note what's going on here: we are technically using softmax
-        as output function and cross entropy as loss, but we never use
-        cross entropy in practice since we check the progresses in terms
-        of winning the game.
-
-        Still calculating the deltas in the output as:
-
-            output[i] - target[i]
-
-        Is exactly what happens if you derivate the deltas with
-        softmax and cross entropy.
-
-        LEARNING OPPORTUNITY: This is a well established and fundamental
-        result in neural networks, you may want to read more about it. */
+        // Calculate output layer deltas
         for i in 0..NN_OUTPUT_SIZE {
-            /* reward_scaling is used with an absolute value (reward_scaling.abs()),
-            which ensures that scaling is always positive, preventing weights from
-            being updated in the wrong direction. */
-            output_deltas[i] = (self.outputs[i] - target_probs[i]) * reward_scaling.abs();
+            self.output_deltas[i] = (self.outputs[i] - target_probs[i]) * reward_scaling.abs();
         }
 
         // Backpropagate error to hidden layer
-        hidden_deltas
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, hidden_delta)| {
-                let error: f32 = output_deltas
-                    .iter()
-                    .enumerate()
-                    .map(|(j, delta)| delta * self.weights_ho[i * NN_OUTPUT_SIZE + j])
-                    .sum::<f32>();
-
-                *hidden_delta = error * relu_derivative(self.hidden[i]);
-            });
+        for i in 0..NN_HIDDEN_SIZE {
+            let mut error: f32 = 0.0;
+            for j in 0..NN_OUTPUT_SIZE {
+                error += self.output_deltas[j] * self.weights_ho[i * NN_OUTPUT_SIZE + j];
+            }
+            self.hidden_deltas[i] = error * relu_derivative(self.hidden[i]);
+        }
 
         /* === STEP 2: Weights updating === */
 
-        // *** Original porting ***
-        //
         // Output layer weights and biases
-        // for i in 0..NN_HIDDEN_SIZE {
-        //     for j in 0..NN_OUTPUT_SIZE {
-        //         self.weights_ho[i * NN_OUTPUT_SIZE + j] -=
-        //             learning_rate * output_deltas[j] * self.hidden[i];
-        //     }
-        // }
-
-        // for j in 0..NN_OUTPUT_SIZE {
-        //     self.biases_o[j] -= learning_rate * output_deltas[j];
-        // }
-
-        // // Hidden layer weights and biases
-        // for j in 0..NN_HIDDEN_SIZE {
-        //     for i in 0..NN_INPUT_SIZE {
-        //         self.weights_ih[j * NN_INPUT_SIZE + i] -=
-        //             learning_rate * hidden_deltas[j] * self.inputs[i];
-        //     }
-        // }
-
-        // for j in 0..NN_HIDDEN_SIZE {
-        //     self.biases_h[j] -= learning_rate * hidden_deltas[j];
-        // }
-
-        // Instead of C-style nested loops, we create a cartesian product of coordinates using flat_map
-        (0..NN_HIDDEN_SIZE)
-            .flat_map(|i| {
-                // For each hidden neuron i, process all outputs j
-                (0..NN_OUTPUT_SIZE).map(move |j| (i, j))
-            })
-            .for_each(|(i, j)| {
-                // Update each weight using the same formula as before
+        for i in 0..NN_HIDDEN_SIZE {
+            for j in 0..NN_OUTPUT_SIZE {
                 self.weights_ho[i * NN_OUTPUT_SIZE + j] -=
-                    learning_rate * output_deltas[j] * self.hidden[i];
-            });
+                    learning_rate * self.output_deltas[j] * self.hidden[i];
+            }
+        }
 
-        // Update output biases using iterator
-        self.biases_o.iter_mut().enumerate().for_each(|(j, bias)| {
-            *bias -= learning_rate * output_deltas[j];
-        });
+        for j in 0..NN_OUTPUT_SIZE {
+            self.biases_o[j] -= learning_rate * self.output_deltas[j];
+        }
 
-        // Hidden layer weights and biases - similar pattern
-        (0..NN_HIDDEN_SIZE)
-            .flat_map(|j| {
-                // For each hidden neuron j, process all inputs i
-                (0..NN_INPUT_SIZE).map(move |i| (j, i))
-            })
-            .for_each(|(j, i)| {
+        // Hidden layer weights and biases
+        for j in 0..NN_HIDDEN_SIZE {
+            for i in 0..NN_INPUT_SIZE {
                 self.weights_ih[j * NN_INPUT_SIZE + i] -=
-                    learning_rate * hidden_deltas[j] * self.inputs[i];
-            });
+                    learning_rate * self.hidden_deltas[j] * self.inputs[i];
+            }
+        }
 
-        // Update hidden biases using iterator
-        self.biases_h.iter_mut().enumerate().for_each(|(j, bias)| {
-            *bias -= learning_rate * hidden_deltas[j];
-        });
+        for j in 0..NN_HIDDEN_SIZE {
+            self.biases_h[j] -= learning_rate * self.hidden_deltas[j];
+        }
+    }
+
+    fn learn_from_game(
+        &mut self,
+        move_history: &[usize],
+        num_moves: usize,
+        nn_moves_even: bool,
+        winner: char,
+    ) {
+        // Determine reward based on game outcome
+        let reward: f32;
+        let nn_symbol = if nn_moves_even { 'O' } else { 'X' };
+
+        if winner == 'T' {
+            reward = 0.3; // small reward for draw
+        } else if winner == nn_symbol {
+            reward = 1.0; // positive reward for win
+        } else {
+            reward = -2.0; // negative reward for loss
+        }
+
+        // Process each move the neural network made
+        for move_idx in 0..num_moves {
+            // Skip if this wasn't a move by the neural network
+            if nn_moves_even && move_idx % 2 != 1 || !nn_moves_even && move_idx % 2 != 0 {
+                continue;
+            }
+
+            // Recreate board state BEFORE this move was made
+            let mut state = GameState::new();
+            for i in 0..move_idx {
+                let symbol = if i % 2 == 0 { 'X' } else { 'O' };
+                state.board[move_history[i]] = symbol;
+            }
+
+            // Convert board to inputs
+            state.board_to_inputs(&mut self.inputs);
+            assert_eq!(self.inputs.len(), NN_INPUT_SIZE, "Inputs length mismatch");
+
+            // Pass the array as a slice to forward_pass; no borrow of self.inputs remains
+            let mut inputs_copy = [0.0; NN_INPUT_SIZE];
+            inputs_copy.copy_from_slice(&self.inputs[..NN_INPUT_SIZE]);
+
+            // Do forward pass
+            self.forward_pass(&inputs_copy);
+
+            /* The move that was actually made by the NN, that is
+            the one we want to reward (positively or negatively). */
+            let mv: usize = move_history[move_idx];
+
+            /* Here we can't really implement temporal difference in the strict
+            reinforcement learning sense, since we don't have an easy way to
+            evaluate if the current situation is better or worse than the
+            previous state in the game.
+
+            However "time related" we do something that is very effective in
+            this case: we scale the reward according to the move time, so that
+            later moves are more impacted (the game is less open to different
+            solutions as we go forward).
+
+            We give a fixed 0.5 importance to all the moves plus
+            a 0.5 that depends on the move position.
+
+            NOTE: this makes A LOT of difference. Experiment with different
+            values.
+
+            LEARNING OPPORTUNITY: Temporal Difference in Reinforcement Learning
+            is a very important result, that was worth the Turing Award in
+            2024 to Sutton and Barto. You may want to read about it. */
+            let move_importance: f32 = 0.5 + 0.5 * (move_idx as f32 / num_moves as f32);
+            let scaled_reward: f32 = reward * move_importance;
+
+            /* Create target probability distribution:
+            let's start with the logits all set to 0. */
+            let mut target_probs: [f32; 9] = [0.0; NN_OUTPUT_SIZE];
+
+            // Set target for chosen move based on reward
+            if scaled_reward >= 0.0 {
+                /* For positive reward, set probability of the chosen move to
+                1, with all the rest set to 0. */
+                target_probs[mv] = 1.0;
+            } else {
+                /* For negative reward, distribute probability to OTHER
+                valid moves, which is conceptually the same as discouraging
+                the move that we want to discourage. */
+
+                // Count actual empty squares on the board (excluding the move we made)
+                let mut valid_moves_count = 0;
+                for i in 0..9 {
+                    if state.board[i] == '.' && i != mv {
+                        valid_moves_count += 1;
+                    }
+                }
+
+                if valid_moves_count > 0 {
+                    let other_prob: f32 = 1.0 / valid_moves_count as f32;
+                    for i in 0..9 {
+                        if state.board[i] == '.' && i != mv {
+                            target_probs[i] = other_prob;
+                        }
+                    }
+                }
+            }
+
+            /* Call the generic backpropagation function, using
+            our target logits as target. */
+            self.backprop(&target_probs, LEARNING_RATE, scaled_reward);
+        }
+    }
+
+    /* Get the best move for the computer using the neural network.
+    Note that there is no complex sampling at all, we just get
+    the output with the highest value THAT has an empty tile. */
+    fn get_computer_move(&mut self, game_state: &mut GameState, display_probs: bool) -> i32 {
+        let mut inputs = vec![0.0; NN_INPUT_SIZE];
+
+        game_state.board_to_inputs(&mut inputs);
+        self.forward_pass(&inputs);
+
+        // Find the highest probability valie and best legal move
+        let mut highest_prob: f32 = -1.0;
+        let mut highest_prob_idx: usize = 0;
+        let mut best_move: i32 = -1;
+        let mut best_legal_prob: f32 = -1.0;
+
+        for i in 0..9 {
+            // Track highest probability overall
+            if self.outputs[i] > highest_prob {
+                highest_prob = self.outputs[i];
+                highest_prob_idx = i
+            }
+
+            // Track best legal move
+            if game_state.board[i] == '.' && (best_move == -1 || self.outputs[i] > best_legal_prob)
+            {
+                best_move = i as i32;
+                best_legal_prob = self.outputs[i];
+            }
+        }
+
+        /* That's just for debugging. It's interesting to show to user
+        in the first iterations of the game, since you can see how initially
+        the net picks illegal moves as best, and so forth. */
+        if display_probs {
+            println!("Neural network move probabilities:");
+            for row in 0..3 {
+                for col in 0..3 {
+                    let pos: usize = row * 3 + col;
+
+                    // Print probability as percentage
+                    print!("{:5.1}%", self.outputs[pos] * 100.0);
+
+                    // Add markers
+                    if pos == highest_prob_idx {
+                        print!("*"); // Highest probability overall
+                    }
+
+                    if pos as i32 == best_move {
+                        print!("#"); // Selected move (highest valid probability)
+                    }
+                    print!(" ");
+                }
+                println!();
+            }
+
+            // Sum of probabilities should be 1.0
+            let mut total_prob = 0.0;
+            for i in 0..9 {
+                total_prob += self.outputs[i];
+            }
+            println!("Sum of all probabilities: {:.2}\n", total_prob);
+        }
+        best_move
+    }
+
+    /* Get a random valid move, this is used for training
+    against a random opponent. Note: this function will loop forever
+    if the board is full, but here we want simple code. Use CRand*/
+    fn get_random_move(&mut self, state: &GameState) -> i32 {
+        loop {
+            let mv: u32 = self.rng.rand_int(9);
+            if state.board[mv as usize] == '.' {
+                return mv as i32;
+            }
+        }
+    }
+
+    fn play_game(&mut self) {
+        let mut state: GameState = GameState::new();
+        let mut winner: char = 'T';
+        let mut move_history: Vec<i32> = vec![0; 9];
+        let mut num_moves: i32 = 0;
+
+        println!("Welcome to Tic Tac Toe! You are X, the computer is O.");
+        println!("Enter positions as numbers from 0 to 8 (see picture).");
+
+        while !state.check_game_over(&mut winner) {
+            state.display_board();
+
+            if state.current_player == 0 {
+                // Human turn
+                let mut input = String::new();
+                print!("Your move (0-8): ");
+                io::stdout().flush().unwrap();
+                io::stdin().read_line(&mut input).unwrap();
+
+                let mvc = input.trim();
+                match mvc.parse::<usize>() {
+                    Ok(mv) => {
+                        // Check if move is valid
+                        if mv > 8 || state.board[mv] != '.' {
+                            println!("Invalid move! Try again.");
+                            continue;
+                        }
+
+                        state.board[mv] = 'X';
+                        move_history[num_moves as usize] = mv as i32;
+                        num_moves += 1;
+                    }
+                    Err(_) => {
+                        println!("Invalid move! Try again.");
+                        continue;
+                    }
+                }
+            } else {
+                // Computer's turn
+                println!("Computer's move:");
+                let mv: usize = self.get_computer_move(&mut state, true) as usize;
+                state.board[mv] = 'O';
+
+                println!("Computer placed O at position {}", mv);
+
+                move_history[num_moves as usize] = mv as i32;
+                num_moves += 1;
+            }
+
+            // Safety check: A tic-tac-toe game should never exceed 9 moves
+            if num_moves >= 9 {
+                eprintln!("ERROR: Game reached maximum moves (9), forcing game over check");
+                state.check_game_over(&mut winner);
+                break;
+            }
+
+            // Switch player
+            state.current_player = 1 - state.current_player;
+        }
+
+        state.display_board();
+
+        match winner {
+            'X' => println!("You win!"),
+            'O' => println!("Computer wins!"),
+            _ => println!("It's a tie!"),
+        }
+
+        // Collect history to [usize]
+        let mhistory: Vec<usize> = move_history[..num_moves as usize]
+            .iter()
+            .map(|&x| x as usize)
+            .collect();
+
+        // Learn from this game - neural network plays as O (second player) so moves are at odd indices
+        self.learn_from_game(&mhistory, num_moves as usize, false, winner);
+    }
+
+    /* Train the neural network against random moves.*/
+    fn train_against_random(&mut self, num_games: usize) {
+        let mut move_history = Vec::with_capacity(9);
+        let mut num_moves: usize;
+        let mut wins = 0;
+        let mut losses = 0;
+        let mut ties = 0;
+
+        println!(
+            "Training neural network against {} random games...",
+            num_games
+        );
+
+        let mut played_games = 0;
+        for i in 0..num_games {
+            // Prepare for a new game
+            move_history.clear();
+            move_history.resize(9, 0);
+            num_moves = 0;
+
+            // Play a random game
+            let mut state = GameState::new();
+            let mut winner: char = '?'; // Initialize to invalid value instead of 'T'
+
+            // Play until game over
+            while !state.check_game_over(&mut winner) {
+                let mv: i32;
+                if state.current_player == 0 {
+                    // Random move for player X
+                    mv = self.get_random_move(&state);
+                } else {
+                    // Neural network move for player O
+                    mv = self.get_computer_move(&mut state, false);
+                }
+
+                // Safety check: A tic-tac-toe game should never exceed 9 moves
+                if num_moves >= 9 {
+                    state.check_game_over(&mut winner);
+                    break;
+                }
+
+                // Make the move
+                let symbol = if state.current_player == 0 { 'X' } else { 'O' };
+                state.board[mv as usize] = symbol;
+                move_history[num_moves] = mv;
+                num_moves += 1;
+
+                // Switch player
+                state.current_player = 1 - state.current_player;
+            }
+
+            played_games += 1;
+
+            // Update statistics based on winner
+            match winner {
+                'O' => wins += 1,   // Neural network won
+                'X' => losses += 1, // Random player won
+                _ => ties += 1,     // Tie
+            }
+
+            // Convert move history to usize vector for learning
+            let mhistory: Vec<usize> = move_history[..num_moves]
+                .iter()
+                .map(|&x| x as usize)
+                .collect();
+
+            // Learn from this game - neural network moves are odd-indexed (player O)
+            self.learn_from_game(&mhistory, num_moves, false, winner);
+
+            // Show progress periodically
+            if (i + 1) % 10000 == 0 {
+                println!(
+                    "Games: {}, Wins: {} ({:.1}%), Losses: {} ({:.1}%), Ties: {} ({:.1}%)",
+                    i + 1,
+                    wins,
+                    (wins as f32 * 100.0) / played_games as f32,
+                    losses,
+                    (losses as f32 * 100.0) / played_games as f32,
+                    ties,
+                    (ties as f32 * 100.0) / played_games as f32
+                );
+
+                // Reset counters for next batch
+                played_games = 0;
+                wins = 0;
+                losses = 0;
+                ties = 0;
+            }
+        }
+
+        println!("\nTraining complete!");
     }
 }
 
@@ -269,13 +577,16 @@ impl GameState {
     // Show board on screen in ASCII "art"
     fn display_board(&self) {
         for row in 0..3 {
-            //Display the board symbols
-            println!(
-                "{} {} {}\n",
+            // Display the board symbols
+            print!(
+                "{}{}{} ",
                 self.board[row * 3],
                 self.board[row * 3 + 1],
                 self.board[row * 3 + 2]
-            )
+            );
+
+            // Display the position numbers for this row, for the poor human
+            println!("{}{}{}", row * 3, row * 3 + 1, row * 3 + 2);
         }
         println!();
     }
@@ -358,79 +669,50 @@ impl GameState {
             if self.board[i] == '.' {
                 empty_tiles += 1;
             }
-            if empty_tiles == 0 {
-                *winner = 'T'; // tie
-                return true;
-            }
         }
+        if empty_tiles == 0 {
+            *winner = 'T'; // tie
+            return true;
+        }
+
         false
-    }
-
-    /* Get the best move for the computer using the neural network.
-    Note that there is no complex sampling at all, we just get
-    the output with the highest value THAT has an empty tile. */
-    fn get_computer_move(&self, nn: &mut NeuralNetwork, display_probs: bool) -> i32 {
-        let mut inputs = vec![0.0; NN_INPUT_SIZE];
-
-        self.board_to_inputs(&mut inputs);
-        nn.forward_pass(&inputs);
-
-        // Find the highest probability valie and best legal move
-        let mut highest_prob: f32 = -1.0;
-        let mut highest_prob_idx: usize = 0;
-        let mut best_move: i32 = -1;
-        let mut best_legal_prob: f32 = -1.0;
-
-        for i in 0..9 {
-            // Track highest probability overall
-            if nn.outputs[i] > highest_prob {
-                highest_prob = nn.outputs[i];
-                highest_prob_idx = i
-            }
-
-            // Track best legal move
-            if self.board[i] == '.' && best_move == -1 || nn.outputs[i] > best_legal_prob {
-                best_move = i as i32;
-                best_legal_prob = nn.outputs[i];
-            }
-        }
-
-        /* That's just for debugging. It's interesting to show to user
-        in the first iterations of the game, since you can see how initially
-        the net picks illegal moves as best, and so forth. */
-        if display_probs {
-            println!("Neural Network move probabilities");
-            for row in 0..3 {
-                for col in 0..3 {
-                    let pos: usize = row * 3 + col;
-
-                    // Print probability as percentage
-                    print!("{:5.1}%", nn.outputs[pos] * 100.0);
-
-                    // Add markers
-                    if pos == highest_prob_idx {
-                        print!("*"); // Highest probability overall
-                    }
-
-                    if pos as i32 == best_move {
-                        print!("#") // Selected move (highest valid probability)
-                    }
-                    println!();
-                }
-
-                // Sum of probabilities should be 1.0
-                let mut total_prob = 0.0;
-                for i in 0..9 {
-                    total_prob += nn.outputs[i];
-                }
-                println!("Sum of probabilities: {:.2}", total_prob);
-            }
-        }
-        best_move
     }
 }
 
-fn main() {}
+fn main() {
+    // Default number of training games
+    let mut random_games = 150000; // Fast and enough to play in a decent way
+
+    // Parse command line arguments
+    let args: Vec<String> = env::args().collect();
+    if args.len() > 1 {
+        random_games = args[1].parse::<i32>().unwrap_or(15000000) as usize;
+    }
+
+    // Initialize neural network
+    let mut nn = NeuralNetwork::new();
+
+    // Train against random moves
+    if random_games > 0 {
+        nn.train_against_random(random_games);
+    }
+
+    // Play game with human and learn more
+    loop {
+        nn.play_game();
+
+        print!("Play again? (y/n): ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+
+        let play_again = input.trim().to_lowercase();
+        if play_again != "y" {
+            break;
+        }
+    }
+}
 
 /* === TESTS === */
 
@@ -668,14 +950,14 @@ mod tests {
     fn test_backprop_deterministic() {
         /* Create a new neural network instance with random initial weights and biases.
         NeuralNetwork::new initializes weights_ih, weights_ho, biases_h, and biases_o
-        with random values, but we’ll override most for determinism. */
+        with random values, but we'll override most for determinism. */
         let mut nn = NeuralNetwork::new();
 
         /* Randomize weights_ih to ensure varied hidden layer activations.
         weights_ih connects NN_INPUT_SIZE (18) inputs to NN_HIDDEN_SIZE (100) hidden nodes.
         Random values prevent uniform hidden values (e.g., 0.22 from weights_ih = 0.1). */
         for i in 0..NN_INPUT_SIZE * NN_HIDDEN_SIZE {
-            nn.weights_ih[i] = random_weight!();
+            nn.weights_ih[i] = nn.rng.rand_float() - 0.5;
         }
 
         /* Set weights_ho to deterministic values (0.2 + i * 0.001) for reproducibility.
@@ -687,14 +969,14 @@ mod tests {
         }
 
         /* Set hidden layer biases to a fixed value (0.01) for consistency.
-        biases_h (size NN_HIDDEN_SIZE) adds a constant to each hidden node’s sum
+        biases_h (size NN_HIDDEN_SIZE) adds a constant to each hidden node's sum
         before ReLU activation in forward_pass. */
         for i in 0..NN_HIDDEN_SIZE {
             nn.biases_h[i] = 0.01;
         }
 
         /* Set output layer biases to a fixed value (0.02) for consistency.
-        biases_o (size NN_OUTPUT_SIZE) adds a constant to each output node’s raw logits
+        biases_o (size NN_OUTPUT_SIZE) adds a constant to each output node's raw logits
         before softmax in forward_pass. */
         for i in 0..NN_OUTPUT_SIZE {
             nn.biases_o[i] = 0.02;
@@ -787,7 +1069,7 @@ mod tests {
             }
         }
 
-        // Assert that at least one weight was updated, failing if backprop didn’t work.
+        // Assert that at least one weight was updated, failing if backprop didn't work.
         assert!(any_weight_updated, "Input-hidden weights should be updated");
     }
 }
