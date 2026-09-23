@@ -13,8 +13,8 @@ A Rust port of the [ttt-rl](https://github.com/antirez/ttt-rl) project, original
 
 ### Training Results
 
-After refactoring and bug fixes, the system now achieves:
-- **Realistic Game Distribution**: ~30% ties, 15-25% neural network wins (and improving)
+With the current learning loop:
+- **Learning Works**: The network's win rate against a random opponent rises with training — a typical 50,000-game run ends with the network winning about two thirds of the games in the final reporting window
 - **Stable Learning**: Neural network performance increases with training
 - **Robust Gameplay**: No crashes during interactive play or training sessions
 
@@ -41,7 +41,7 @@ After refactoring and bug fixes, the system now achieves:
 - **Reinforcement Learning**:
   - **Reward System**: +1.0 for wins, +0.3 for ties, -2.0 for losses
   - **Temporal Scaling**: Later moves weighted more heavily during learning
-  - **Probability Distribution**: Winner-take-all for positive rewards, uniform distribution over legal alternatives for negative rewards
+  - **Probability Distribution**: Winner-take-all for positive rewards, uniform distribution over the other legal moves for negative rewards
 
 ## Building and Running
 
@@ -51,14 +51,28 @@ Requires Rust (stable). To compile and run:
 # Run tests
 cargo test
 
-# Train the neural network
-cargo run -- train [number_of_games]
+# Build an optimized binary
+cargo build --release
 
-# Play against the trained neural network
-cargo run -- play
+# Train 150000 games (the default) against random moves, then play
+# interactively as X against the network (O)
+cargo run --release -- 150000
 
-# View help for all options
-cargo run -- --help
+# Skip training and play with a freshly initialized network
+cargo run --release -- 0
+```
+
+The binary takes a single optional positional argument: the number of
+training games (default: 150000). There are no subcommands. The trained
+network is kept in memory only — every run trains from scratch.
+
+A `Makefile` wraps the common cargo commands:
+
+```bash
+make                  # format, lint, build, test
+make lint             # cargo clippy with warnings denied
+make run              # train GAMES games, then play (default GAMES=150000)
+make run GAMES=50000  # shorter training session
 ```
 
 ## Dependencies
