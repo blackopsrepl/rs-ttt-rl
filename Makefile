@@ -1,41 +1,52 @@
 SHELL := /bin/bash
-.PHONY: help config rust-version build format lint test
+.PHONY: help all build release run test lint format clean config rust-version
 
 help:
-	@echo "Makefile Commands:"
-	@echo "  config               - Set up the Rust environment."
-	@echo "  build                - Build chewbekka with cargo"
-	@echo "  format               - Format source code with cargo fmt"
-	@echo "  lint                 - Lint source code with cargo clippy"
-	@echo "  test                 - Test chewbekka with cargo test"
+	@echo "Makefile commands for rs-ttt-rl:"
+	@echo "  all          - Format, lint, build and test"
+	@echo "  build        - Debug build with cargo"
+	@echo "  release      - Optimized build with cargo (fat LTO)"
+	@echo "  run          - Train GAMES games against random moves, then play"
+	@echo "                 interactively (default GAMES=150000, GAMES=0 skips training)"
+	@echo "  test         - Run the test suite with cargo test"
+	@echo "  lint         - Lint with cargo clippy, warnings denied"
+	@echo "  format       - Format sources with cargo fmt"
+	@echo "  clean        - Remove build artifacts"
+	@echo "  config       - Update and set the stable Rust toolchain"
+	@echo "  rust-version - Print Rust toolchain versions"
 
 all: format lint build test
 
+build:
+	cargo build
+
+release:
+	cargo build --release
+
+GAMES ?= 150000
+run:
+	cargo run --release -- $(GAMES)
+
+test:
+	cargo test
+
+lint:
+	cargo clippy --all-targets --all-features -- -D warnings
+
+format:
+	cargo fmt
+
+clean:
+	cargo clean
+
 config:
-	@echo "Updating rust toolchain"
 	rustup update stable
 	rustup default stable
 
 rust-version:
-	@echo "Rust command-line utility versions:"
-	rustc --version 			#rust compiler
-	cargo --version 			#rust package manager
-	rustfmt --version			#rust code formatter
-	rustup --version			#rust toolchain manager
-	clippy-driver --version		#rust linter
-
-build:
-	@echo "Building all projects with cargo"
-	./util/build.sh
-
-format:
-	@echo "Formatting all projects with cargo"
-	./util/format.sh
-
-lint:
-	@echo "Linting all projects with cargo"
-	./util/lint.sh
-
-test:
-	@echo "Testing all projects with cargo"
-	./util/test.sh
+	@echo "Rust toolchain versions:"
+	rustc --version
+	cargo --version
+	rustfmt --version
+	rustup --version
+	clippy-driver --version
