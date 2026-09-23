@@ -1,0 +1,4 @@
+[build]
+# target-cpu=native tunes codegen to the build host; rebuild if the binary
+# must run on a different machine.
+rustflags = ["-C", "target-cpu=native"]
