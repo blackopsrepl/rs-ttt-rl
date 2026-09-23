@@ -401,8 +401,8 @@ impl NeuralNetwork {
     fn play_game(&mut self) {
         let mut state: GameState = GameState::new();
         let mut winner: char = 'T';
-        let mut move_history: Vec<i32> = vec![0; 9];
-        let mut num_moves: i32 = 0;
+        let mut move_history: [usize; 9] = [0; 9];
+        let mut num_moves: usize = 0;
 
         println!("Welcome to Tic Tac Toe! You are X, the computer is O.");
         println!("Enter positions as numbers from 0 to 8 (see picture).");
@@ -430,7 +430,7 @@ impl NeuralNetwork {
                         }
 
                         state.board[mv] = 'X';
-                        move_history[num_moves as usize] = mv as i32;
+                        move_history[num_moves] = mv;
                         num_moves += 1;
                     }
                     Err(_) => {
@@ -446,7 +446,7 @@ impl NeuralNetwork {
 
                 println!("Computer placed O at position {}", mv);
 
-                move_history[num_moves as usize] = mv as i32;
+                move_history[num_moves] = mv;
                 num_moves += 1;
             }
 
@@ -469,19 +469,13 @@ impl NeuralNetwork {
             _ => println!("It's a tie!"),
         }
 
-        // Collect history to [usize]
-        let mhistory: Vec<usize> = move_history[..num_moves as usize]
-            .iter()
-            .map(|&x| x as usize)
-            .collect();
-
         // Learn from this game - neural network plays as O (second player) so moves are at odd indices
-        self.learn_from_game(&mhistory, num_moves as usize, false, winner);
+        self.learn_from_game(&move_history, num_moves, false, winner);
     }
 
     /* Train the neural network against random moves.*/
     fn train_against_random(&mut self, num_games: usize) {
-        let mut move_history = Vec::with_capacity(9);
+        let mut move_history: [usize; 9] = [0; 9];
         let mut num_moves: usize;
         let mut wins = 0;
         let mut losses = 0;
@@ -494,9 +488,7 @@ impl NeuralNetwork {
 
         let mut played_games = 0;
         for i in 0..num_games {
-            // Prepare for a new game
-            move_history.clear();
-            move_history.resize(9, 0);
+            // A new game starts with an empty history
             num_moves = 0;
 
             // Play a random game
@@ -523,7 +515,7 @@ impl NeuralNetwork {
                 // Make the move
                 let symbol = if state.current_player == 0 { 'X' } else { 'O' };
                 state.board[mv as usize] = symbol;
-                move_history[num_moves] = mv;
+                move_history[num_moves] = mv as usize;
                 num_moves += 1;
 
                 // Switch player
@@ -539,14 +531,8 @@ impl NeuralNetwork {
                 _ => ties += 1,     // Tie
             }
 
-            // Convert move history to usize vector for learning
-            let mhistory: Vec<usize> = move_history[..num_moves]
-                .iter()
-                .map(|&x| x as usize)
-                .collect();
-
             // Learn from this game - neural network moves are odd-indexed (player O)
-            self.learn_from_game(&mhistory, num_moves, false, winner);
+            self.learn_from_game(&move_history, num_moves, false, winner);
 
             // Show progress periodically
             if (i + 1) % 10000 == 0 {
