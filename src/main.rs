@@ -240,8 +240,11 @@ impl NeuralNetwork {
         // Process each move the neural network made
         for move_idx in 0..num_moves {
             // Learn only from moves made by the neural network
-            let is_nn_move =
-                if nn_moves_even { move_idx % 2 == 1 } else { move_idx % 2 == 0 };
+            let is_nn_move = if nn_moves_even {
+                move_idx % 2 == 1
+            } else {
+                move_idx % 2 == 0
+            };
 
             if is_nn_move {
                 // Convert board to inputs and run the forward pass
