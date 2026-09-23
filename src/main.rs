@@ -23,20 +23,20 @@ struct GameState {
 
 struct NeuralNetwork {
     // Weights and biases
-    weights_ih: Vec<f32>,
-    weights_ho: Vec<f32>,
-    biases_h: Vec<f32>,
-    biases_o: Vec<f32>,
+    weights_ih: [f32; NN_INPUT_SIZE * NN_HIDDEN_SIZE],
+    weights_ho: [f32; NN_HIDDEN_SIZE * NN_OUTPUT_SIZE],
+    biases_h: [f32; NN_HIDDEN_SIZE],
+    biases_o: [f32; NN_OUTPUT_SIZE],
 
     // Activations are part of the structure for simplicity
-    inputs: Vec<f32>,
-    hidden: Vec<f32>,
-    raw_logits: Vec<f32>, // Outputs before softmax()
-    outputs: Vec<f32>,    // Outputs after softmax()
+    inputs: [f32; NN_INPUT_SIZE],
+    hidden: [f32; NN_HIDDEN_SIZE],
+    raw_logits: [f32; NN_OUTPUT_SIZE], // Outputs before softmax()
+    outputs: [f32; NN_OUTPUT_SIZE],    // Outputs after softmax()
 
-    // Pre-allocated vectors for backprop to avoid allocations
-    output_deltas: Vec<f32>,
-    hidden_deltas: Vec<f32>,
+    // Pre-allocated buffers for backprop to avoid allocations
+    output_deltas: [f32; NN_OUTPUT_SIZE],
+    hidden_deltas: [f32; NN_HIDDEN_SIZE],
 
     // Single RNG instance to avoid expensive SystemTime calls
     rng: CRand,
@@ -70,10 +70,12 @@ impl NeuralNetwork {
     fn new() -> Self {
         let mut rng = CRand::new();
 
-        let mut weights_ih: Vec<f32> = vec![0.0; NN_INPUT_SIZE * NN_HIDDEN_SIZE];
-        let mut weights_ho: Vec<f32> = vec![0.0; NN_HIDDEN_SIZE * NN_OUTPUT_SIZE];
-        let mut biases_h: Vec<f32> = vec![0.0; NN_HIDDEN_SIZE];
-        let mut biases_o: Vec<f32> = vec![0.0; NN_OUTPUT_SIZE];
+        let mut weights_ih: [f32; NN_INPUT_SIZE * NN_HIDDEN_SIZE] =
+            [0.0; NN_INPUT_SIZE * NN_HIDDEN_SIZE];
+        let mut weights_ho: [f32; NN_HIDDEN_SIZE * NN_OUTPUT_SIZE] =
+            [0.0; NN_HIDDEN_SIZE * NN_OUTPUT_SIZE];
+        let mut biases_h: [f32; NN_HIDDEN_SIZE] = [0.0; NN_HIDDEN_SIZE];
+        let mut biases_o: [f32; NN_OUTPUT_SIZE] = [0.0; NN_OUTPUT_SIZE];
 
         // Initialize weights with random values between -0.5 and 0.5 using single RNG
         for w in weights_ih.iter_mut() {
@@ -94,12 +96,12 @@ impl NeuralNetwork {
             weights_ho,
             biases_h,
             biases_o,
-            inputs: vec![0.0; NN_INPUT_SIZE],
-            hidden: vec![0.0; NN_HIDDEN_SIZE],
-            raw_logits: vec![0.0; NN_OUTPUT_SIZE],
-            outputs: vec![0.0; NN_OUTPUT_SIZE],
-            output_deltas: vec![0.0; NN_OUTPUT_SIZE],
-            hidden_deltas: vec![0.0; NN_HIDDEN_SIZE],
+            inputs: [0.0; NN_INPUT_SIZE],
+            hidden: [0.0; NN_HIDDEN_SIZE],
+            raw_logits: [0.0; NN_OUTPUT_SIZE],
+            outputs: [0.0; NN_OUTPUT_SIZE],
+            output_deltas: [0.0; NN_OUTPUT_SIZE],
+            hidden_deltas: [0.0; NN_HIDDEN_SIZE],
             rng,
         }
     }
@@ -760,14 +762,12 @@ mod tests {
     #[test]
     fn test_board_to_inputs() {
         let mut nn = NeuralNetwork::new();
-        let mut inputs = vec![0.0; NN_INPUT_SIZE];
 
         // crete game state
         let mut game_state = GameState::new();
 
         // Test case 1: Empty board
-        game_state.board_to_inputs(&mut inputs);
-        nn.inputs = inputs.clone();
+        game_state.board_to_inputs(&mut nn.inputs);
 
         assert!(
             nn.inputs.iter().all(|&x| x == 0.0),
@@ -778,8 +778,7 @@ mod tests {
         // Test case 2: non-empty board
         game_state.board[0] = 'X';
         game_state.board[1] = 'O';
-        game_state.board_to_inputs(&mut inputs);
-        nn.inputs = inputs.clone();
+        game_state.board_to_inputs(&mut nn.inputs);
         assert_eq!(nn.inputs[0], 1.0);
         assert_eq!(nn.inputs[1], 0.0);
         assert_eq!(nn.inputs[2], 0.0);
@@ -798,7 +797,7 @@ mod tests {
         let mut nn = NeuralNetwork::new();
 
         // Test case 1: Standard input
-        nn.raw_logits = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        nn.raw_logits = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
 
         // Apply softmax
         nn.softmax();
@@ -826,7 +825,7 @@ mod tests {
         );
 
         // Test case 2: Equal logits (should produce uniform distribution)
-        nn.raw_logits = vec![1.0; NN_OUTPUT_SIZE];
+        nn.raw_logits = [1.0; NN_OUTPUT_SIZE];
 
         // Apply softmax
         nn.softmax();
@@ -854,7 +853,7 @@ mod tests {
         });
 
         // Test case 3: Large negative logits (numerical stability)
-        nn.raw_logits = vec![-1000.0; NN_OUTPUT_SIZE];
+        nn.raw_logits = [-1000.0; NN_OUTPUT_SIZE];
 
         // Apply softmax
         nn.softmax();
@@ -904,7 +903,7 @@ mod tests {
         }
 
         // Prepare simple input data (e.g., all 1.0)
-        nn.inputs = vec![1.0; NN_INPUT_SIZE];
+        nn.inputs = [1.0; NN_INPUT_SIZE];
 
         // Run forward pass
         nn.forward_pass();
@@ -977,12 +976,12 @@ mod tests {
 
         /* Store the initial weights_ih to compare with updated weights after backprop.
         This allows us to check if backprop modifies weights_ih as expected. */
-        let orig_weights_ih = nn.weights_ih.clone();
+        let orig_weights_ih = nn.weights_ih;
 
         /* Set the first five inputs to non-zero values (0.5, 0.3, 0.7, 0.2, 0.4).
         This ensures the first five weights_ih updates are non-zero, as the gradient
         is hidden_deltas[j] * inputs[i]. Zero inputs produce zero updates. */
-        nn.inputs = vec![0.0; NN_INPUT_SIZE];
+        nn.inputs = [0.0; NN_INPUT_SIZE];
         let len = nn.inputs.len().min(5);
         nn.inputs[..len].copy_from_slice(&[0.5, 0.3, 0.7, 0.2, 0.4][..len]);
 
@@ -1007,7 +1006,7 @@ mod tests {
 
         /* Create a target probability vector of size NN_OUTPUT_SIZE (9), all zeros.
         This represents the desired output (e.g., the correct move). */
-        let mut target_probs = vec![0.0; NN_OUTPUT_SIZE];
+        let mut target_probs = [0.0; NN_OUTPUT_SIZE];
 
         /* Set the first output to 1.0, simulating a target where the first move is correct.
         This creates a clear error for backprop to learn from. */
