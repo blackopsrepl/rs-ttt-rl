@@ -410,7 +410,10 @@ impl NeuralNetwork {
                 let mut input = String::new();
                 print!("Your move (0-8): ");
                 io::stdout().flush().unwrap();
-                io::stdin().read_line(&mut input).unwrap();
+                if io::stdin().read_line(&mut input).unwrap_or(0) == 0 {
+                    println!("\nInput stream closed, quitting.");
+                    return;
+                }
 
                 let mvc = input.trim();
                 match mvc.parse::<usize>() {
@@ -705,7 +708,9 @@ fn main() {
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        if io::stdin().read_line(&mut input).unwrap_or(0) == 0 {
+            break;
+        }
 
         let play_again = input.trim().to_lowercase();
         if play_again != "y" {
