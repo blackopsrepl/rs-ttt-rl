@@ -147,11 +147,16 @@ impl NeuralNetwork {
             self.hidden[i] = relu(sum);
         }
 
-        // Hidden to output (raw logits)
+        // Hidden to output (raw logits), seeded with the biases
         for i in 0..NN_OUTPUT_SIZE {
             self.raw_logits[i] = self.biases_o[i];
-            for j in 0..NN_HIDDEN_SIZE {
-                self.raw_logits[i] += self.hidden[j] * self.weights_ho[j * NN_OUTPUT_SIZE + i];
+        }
+
+        // Accumulate hidden contributions walking each weights row contiguously
+        for j in 0..NN_HIDDEN_SIZE {
+            let h = self.hidden[j];
+            for i in 0..NN_OUTPUT_SIZE {
+                self.raw_logits[i] += h * self.weights_ho[j * NN_OUTPUT_SIZE + i];
             }
         }
 
