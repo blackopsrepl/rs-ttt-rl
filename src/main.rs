@@ -174,8 +174,8 @@ impl NeuralNetwork {
         /* === STEP 1: Compute deltas === */
 
         // Calculate output layer deltas
-        for i in 0..NN_OUTPUT_SIZE {
-            self.output_deltas[i] = (self.outputs[i] - target_probs[i]) * reward_scaling.abs();
+        for (i, delta) in self.output_deltas.iter_mut().enumerate() {
+            *delta = (self.outputs[i] - target_probs[i]) * reward_scaling.abs();
         }
 
         // Backpropagate error to hidden layer
@@ -222,23 +222,21 @@ impl NeuralNetwork {
         winner: char,
     ) {
         // Determine reward based on game outcome
-        let reward: f32;
         let nn_symbol = if nn_moves_even { 'O' } else { 'X' };
-
-        if winner == 'T' {
-            reward = 0.3; // small reward for draw
+        let reward = if winner == 'T' {
+            0.3 // small reward for draw
         } else if winner == nn_symbol {
-            reward = 1.0; // positive reward for win
+            1.0 // positive reward for win
         } else {
-            reward = -2.0; // negative reward for loss
-        }
+            -2.0 // negative reward for loss
+        };
 
         // Board rebuilt incrementally: when we reach move_idx, state.board
         // holds exactly the position as it was BEFORE that move was played.
         let mut state = GameState::new();
 
         // Process each move the neural network made
-        for move_idx in 0..num_moves {
+        for (move_idx, &mv) in move_history.iter().enumerate().take(num_moves) {
             // Learn only from moves made by the neural network
             let is_nn_move = if nn_moves_even {
                 move_idx % 2 == 1
@@ -252,8 +250,8 @@ impl NeuralNetwork {
                 self.forward_pass();
 
                 /* The move that was actually made by the NN, that is
-                the one we want to reward (positively or negatively). */
-                let mv: usize = move_history[move_idx];
+                the one we want to reward (positively or negatively), is
+                bound as `mv` above. */
 
                 /* Here we can't really implement temporal difference in the strict
                 reinforcement learning sense, since we don't have an easy way to
@@ -301,8 +299,8 @@ impl NeuralNetwork {
 
                     if valid_moves_count > 0 {
                         let other_prob: f32 = 1.0 / valid_moves_count as f32;
-                        for i in 0..9 {
-                            if state.board[i] == '.' && i != mv {
+                        for (i, cell) in state.board.iter().enumerate() {
+                            if *cell == '.' && i != mv {
                                 target_probs[i] = other_prob;
                             }
                         }
@@ -316,7 +314,7 @@ impl NeuralNetwork {
 
             // Advance the board with the move at move_idx
             let symbol = if move_idx % 2 == 0 { 'X' } else { 'O' };
-            state.board[move_history[move_idx]] = symbol;
+            state.board[mv] = symbol;
         }
     }
 
@@ -499,14 +497,13 @@ impl NeuralNetwork {
 
             // Play until game over
             while !state.check_game_over(&mut winner) {
-                let mv: i32;
-                if state.current_player == 0 {
+                let mv: i32 = if state.current_player == 0 {
                     // Random move for player X
-                    mv = self.get_random_move(&state);
+                    self.get_random_move(&state)
                 } else {
                     // Neural network move for player O
-                    mv = self.get_computer_move(&mut state, false);
-                }
+                    self.get_computer_move(&mut state, false)
+                };
 
                 // Safety check: A tic-tac-toe game should never exceed 9 moves
                 if num_moves >= 9 {
