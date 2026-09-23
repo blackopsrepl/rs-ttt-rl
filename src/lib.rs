@@ -53,9 +53,15 @@ impl CRand {
         self.rand() as f32 / Self::RAND_MAX as f32
     }
 
-    // Returns an integer between 0 and n-1
+    // Returns an integer between 0 and n-1, without modulo bias
     pub fn rand_int(&mut self, n: u32) -> u32 {
-        self.rand() % n
+        let limit: u32 = Self::RAND_MAX + 1 - (Self::RAND_MAX + 1) % n;
+        loop {
+            let r = self.rand();
+            if r < limit {
+                return r % n;
+            }
+        }
     }
 }
 
