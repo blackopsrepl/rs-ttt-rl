@@ -134,11 +134,10 @@ impl NeuralNetwork {
         }
     }
 
-    /* Neural network foward pass (inference). We store the activations
-    so we can also do backpropagation later. */
-    fn forward_pass(&mut self, inputs: &[f32]) {
-        self.inputs.copy_from_slice(&inputs[0..NN_INPUT_SIZE]);
-
+    /* Neural network foward pass (inference) over the activations stored in
+    self.inputs. We store the activations so we can also do backpropagation
+    later. */
+    fn forward_pass(&mut self) {
         // Input to hidden layer
         for i in 0..NN_HIDDEN_SIZE {
             let mut sum: f32 = self.biases_h[i];
@@ -241,16 +240,9 @@ impl NeuralNetwork {
                 state.board[move_history[i]] = symbol;
             }
 
-            // Convert board to inputs
+            // Convert board to inputs and run the forward pass
             state.board_to_inputs(&mut self.inputs);
-            assert_eq!(self.inputs.len(), NN_INPUT_SIZE, "Inputs length mismatch");
-
-            // Pass the array as a slice to forward_pass; no borrow of self.inputs remains
-            let mut inputs_copy = [0.0; NN_INPUT_SIZE];
-            inputs_copy.copy_from_slice(&self.inputs[..NN_INPUT_SIZE]);
-
-            // Do forward pass
-            self.forward_pass(&inputs_copy);
+            self.forward_pass();
 
             /* The move that was actually made by the NN, that is
             the one we want to reward (positively or negatively). */
@@ -320,10 +312,8 @@ impl NeuralNetwork {
     Note that there is no complex sampling at all, we just get
     the output with the highest value THAT has an empty tile. */
     fn get_computer_move(&mut self, game_state: &mut GameState, display_probs: bool) -> i32 {
-        let mut inputs = vec![0.0; NN_INPUT_SIZE];
-
-        game_state.board_to_inputs(&mut inputs);
-        self.forward_pass(&inputs);
+        game_state.board_to_inputs(&mut self.inputs);
+        self.forward_pass();
 
         // Find the highest probability valie and best legal move
         let mut highest_prob: f32 = -1.0;
@@ -907,10 +897,10 @@ mod tests {
         }
 
         // Prepare simple input data (e.g., all 1.0)
-        let inputs = vec![1.0; NN_INPUT_SIZE];
+        nn.inputs = vec![1.0; NN_INPUT_SIZE];
 
         // Run forward pass
-        nn.forward_pass(&inputs);
+        nn.forward_pass();
 
         // Calculate expected outputs manually
         // For hidden layer: bias + sum(input * weight) = 0.01 + (1.0 * 0.1 * NN_INPUT_SIZE) = 0.01 + 0.1*N
@@ -982,26 +972,23 @@ mod tests {
         This allows us to check if backprop modifies weights_ih as expected. */
         let orig_weights_ih = nn.weights_ih.clone();
 
-        /* Create an input vector of size NN_INPUT_SIZE (18) initialized to zeros.
-        This represents a tic-tac-toe board state for the network to process. */
-        let mut inputs = vec![0.0; NN_INPUT_SIZE];
-
         /* Set the first five inputs to non-zero values (0.5, 0.3, 0.7, 0.2, 0.4).
         This ensures the first five weights_ih updates are non-zero, as the gradient
         is hidden_deltas[j] * inputs[i]. Zero inputs produce zero updates. */
-        let len = inputs.len().min(5);
-        inputs[..len].copy_from_slice(&[0.5, 0.3, 0.7, 0.2, 0.4][..len]);
+        nn.inputs = vec![0.0; NN_INPUT_SIZE];
+        let len = nn.inputs.len().min(5);
+        nn.inputs[..len].copy_from_slice(&[0.5, 0.3, 0.7, 0.2, 0.4][..len]);
 
         // Print inputs for debugging, showing the board state being tested.
-        println!("Input values: {:?}", inputs);
+        println!("Input values: {:?}", nn.inputs);
 
         /* Run the forward pass to compute hidden and output values.
         forward_pass:
-        1. Copies inputs to nn.inputs.
+        1. Reads the activations stored in nn.inputs.
         2. Computes hidden values: sum = biases_h[i] + sum(inputs[j] * weights_ih[i * NN_INPUT_SIZE + j]), then applies ReLU.
         3. Computes raw_logits: biases_o[i] + sum(hidden[j] * weights_ho[j * NN_OUTPUT_SIZE + i]).
         4. Applies softmax to get output probabilities. */
-        nn.forward_pass(&inputs);
+        nn.forward_pass();
 
         /* Print hidden values to verify they vary due to random weights_ih.
         These are the ReLU-activated sums for each of the 100 hidden nodes. */
