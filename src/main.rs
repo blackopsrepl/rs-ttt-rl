@@ -382,15 +382,20 @@ impl NeuralNetwork {
     }
 
     /* Get a random valid move, this is used for training
-    against a random opponent. Note: this function will loop forever
-    if the board is full, but here we want simple code. Use CRand*/
+    against a random opponent. Collects the empty squares first, so the
+    cost is bounded and the pick is uniform over actually-available moves.
+    Requires at least one empty square. Use CRand*/
     fn get_random_move(&mut self, state: &GameState) -> i32 {
-        loop {
-            let mv: u32 = self.rng.rand_int(9);
-            if state.board[mv as usize] == '.' {
-                return mv as i32;
+        let mut empties: [u8; 9] = [0; 9];
+        let mut count: usize = 0;
+        for i in 0..9 {
+            if state.board[i] == '.' {
+                empties[count] = i as u8;
+                count += 1;
             }
         }
+        debug_assert!(count > 0, "no empty square left for a random move");
+        empties[self.rng.rand_int(count as u32) as usize] as i32
     }
 
     fn play_game(&mut self) {
