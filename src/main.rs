@@ -226,85 +226,87 @@ impl NeuralNetwork {
             reward = -2.0; // negative reward for loss
         }
 
+        // Board rebuilt incrementally: when we reach move_idx, state.board
+        // holds exactly the position as it was BEFORE that move was played.
+        let mut state = GameState::new();
+
         // Process each move the neural network made
         for move_idx in 0..num_moves {
-            // Skip if this wasn't a move by the neural network
-            if nn_moves_even && move_idx % 2 != 1 || !nn_moves_even && move_idx % 2 != 0 {
-                continue;
-            }
+            // Learn only from moves made by the neural network
+            let is_nn_move =
+                if nn_moves_even { move_idx % 2 == 1 } else { move_idx % 2 == 0 };
 
-            // Recreate board state BEFORE this move was made
-            let mut state = GameState::new();
-            for i in 0..move_idx {
-                let symbol = if i % 2 == 0 { 'X' } else { 'O' };
-                state.board[move_history[i]] = symbol;
-            }
+            if is_nn_move {
+                // Convert board to inputs and run the forward pass
+                state.board_to_inputs(&mut self.inputs);
+                self.forward_pass();
 
-            // Convert board to inputs and run the forward pass
-            state.board_to_inputs(&mut self.inputs);
-            self.forward_pass();
+                /* The move that was actually made by the NN, that is
+                the one we want to reward (positively or negatively). */
+                let mv: usize = move_history[move_idx];
 
-            /* The move that was actually made by the NN, that is
-            the one we want to reward (positively or negatively). */
-            let mv: usize = move_history[move_idx];
+                /* Here we can't really implement temporal difference in the strict
+                reinforcement learning sense, since we don't have an easy way to
+                evaluate if the current situation is better or worse than the
+                previous state in the game.
 
-            /* Here we can't really implement temporal difference in the strict
-            reinforcement learning sense, since we don't have an easy way to
-            evaluate if the current situation is better or worse than the
-            previous state in the game.
+                However "time related" we do something that is very effective in
+                this case: we scale the reward according to the move time, so that
+                later moves are more impacted (the game is less open to different
+                solutions as we go forward).
 
-            However "time related" we do something that is very effective in
-            this case: we scale the reward according to the move time, so that
-            later moves are more impacted (the game is less open to different
-            solutions as we go forward).
+                We give a fixed 0.5 importance to all the moves plus
+                a 0.5 that depends on the move position.
 
-            We give a fixed 0.5 importance to all the moves plus
-            a 0.5 that depends on the move position.
+                NOTE: this makes A LOT of difference. Experiment with different
+                values.
 
-            NOTE: this makes A LOT of difference. Experiment with different
-            values.
+                LEARNING OPPORTUNITY: Temporal Difference in Reinforcement Learning
+                is a very important result, that was worth the Turing Award in
+                2024 to Sutton and Barto. You may want to read about it. */
+                let move_importance: f32 = 0.5 + 0.5 * (move_idx as f32 / num_moves as f32);
+                let scaled_reward: f32 = reward * move_importance;
 
-            LEARNING OPPORTUNITY: Temporal Difference in Reinforcement Learning
-            is a very important result, that was worth the Turing Award in
-            2024 to Sutton and Barto. You may want to read about it. */
-            let move_importance: f32 = 0.5 + 0.5 * (move_idx as f32 / num_moves as f32);
-            let scaled_reward: f32 = reward * move_importance;
+                /* Create target probability distribution:
+                let's start with the logits all set to 0. */
+                let mut target_probs: [f32; 9] = [0.0; NN_OUTPUT_SIZE];
 
-            /* Create target probability distribution:
-            let's start with the logits all set to 0. */
-            let mut target_probs: [f32; 9] = [0.0; NN_OUTPUT_SIZE];
+                // Set target for chosen move based on reward
+                if scaled_reward >= 0.0 {
+                    /* For positive reward, set probability of the chosen move to
+                    1, with all the rest set to 0. */
+                    target_probs[mv] = 1.0;
+                } else {
+                    /* For negative reward, distribute probability to OTHER
+                    valid moves, which is conceptually the same as discouraging
+                    the move that we want to discourage. */
 
-            // Set target for chosen move based on reward
-            if scaled_reward >= 0.0 {
-                /* For positive reward, set probability of the chosen move to
-                1, with all the rest set to 0. */
-                target_probs[mv] = 1.0;
-            } else {
-                /* For negative reward, distribute probability to OTHER
-                valid moves, which is conceptually the same as discouraging
-                the move that we want to discourage. */
-
-                // Count actual empty squares on the board (excluding the move we made)
-                let mut valid_moves_count = 0;
-                for i in 0..9 {
-                    if state.board[i] == '.' && i != mv {
-                        valid_moves_count += 1;
-                    }
-                }
-
-                if valid_moves_count > 0 {
-                    let other_prob: f32 = 1.0 / valid_moves_count as f32;
+                    // Count actual empty squares on the board (excluding the move we made)
+                    let mut valid_moves_count = 0;
                     for i in 0..9 {
                         if state.board[i] == '.' && i != mv {
-                            target_probs[i] = other_prob;
+                            valid_moves_count += 1;
+                        }
+                    }
+
+                    if valid_moves_count > 0 {
+                        let other_prob: f32 = 1.0 / valid_moves_count as f32;
+                        for i in 0..9 {
+                            if state.board[i] == '.' && i != mv {
+                                target_probs[i] = other_prob;
+                            }
                         }
                     }
                 }
+
+                /* Call the generic backpropagation function, using
+                our target logits as target. */
+                self.backprop(&target_probs, LEARNING_RATE, scaled_reward);
             }
 
-            /* Call the generic backpropagation function, using
-            our target logits as target. */
-            self.backprop(&target_probs, LEARNING_RATE, scaled_reward);
+            // Advance the board with the move at move_idx
+            let symbol = if move_idx % 2 == 0 { 'X' } else { 'O' };
+            state.board[move_history[move_idx]] = symbol;
         }
     }
 
